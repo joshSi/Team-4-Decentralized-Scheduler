@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only what loadgen needs
+COPY multinode/contracts.py multinode/
+COPY multinode/dataset_loader.py multinode/
+COPY multinode/workload_generator.py multinode/
+COPY multinode/client.py multinode/
+COPY multinode/load_generator.py multinode/
+
+# Optionally bake tiny sample datasets directly into the image
+# COPY datasets/gsm8k.jsonl /app/data/gsm8k.jsonl
+# COPY datasets/sharegpt.json /app/data/sharegpt.json
+
+COPY docker/multinode-loadgen/entrypoint_loadgen.py .
+
+RUN useradd -m -u 1000 lg && chown -R lg:lg /app
+USER lg
+
+CMD ["python3", "-u", "entrypoint_loadgen.py"]
