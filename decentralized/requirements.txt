@@ -17,3 +17,14 @@ pandas>=2.0.0
 # Development/Testing
 # pytest>=7.4.0
 # pytest-timeout>=2.1.0
+
+# Multinode requirements 
+fastapi
+uvicorn
+requests
+pydantic
+vllm>=facebook/opt-125m
+# transformers
+# torch
+pynvml
+

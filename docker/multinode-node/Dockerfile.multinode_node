@@ -1,0 +1,35 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps (optional, helpful for ps/top in node memory utils)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    procps iproute2 net-tools && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# App code (copy only what's needed)
+COPY multinode/contracts.py multinode/
+COPY multinode/model_loader.py multinode/
+COPY multinode/node.py multinode/
+
+# Entrypoint
+COPY docker/multinode-node/entrypoint_node.py .
+
+# Non-root
+RUN useradd -m -u 1000 node && chown -R node:node /app
+USER node
+
+# UDP/TCP port exposed for the node
+EXPOSE 9000/udp 9000/tcp
+EXPOSE 9001/udp 9001/tcp
+EXPOSE 9002/udp 9002/tcp
+
+# Healthcheck: socket bind sanity
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('', 0)); s.close()"
+
+CMD ["python3", "-u", "entrypoint_node.py"]

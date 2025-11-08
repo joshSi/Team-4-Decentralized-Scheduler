@@ -1,0 +1,113 @@
+version: "3.9"
+
+services:
+  # --------- Node 0 (entry) ---------
+  multinode-node-0:
+    build:
+      context: .
+      dockerfile: docker/multinode-node/Dockerfile.multinode_node
+    image: multinode/node:latest
+    container_name: multinode-node-0
+    environment:
+      NODE_ID: n0
+      HOST: 0.0.0.0
+      PORT: "9000"
+      SEED_NODES: "multinode-node-1:9001 multinode-node-2:9002"
+      PRELOAD_MODELS: "opt-1.3b"
+      GOSSIP_INTERVAL: "1.0"
+      WORKER_TIMEOUT: "10.0"
+      VERBOSE: "true"
+      USE_REAL_MODELS: "false"
+      GCS_BUCKET: "remote_model"
+      MODEL_CACHE_DIR: "/tmp/model_cache"
+      DEVICE: "cpu"
+    ports:
+      - "9000:9000/udp"
+      - "9000:9000/tcp"
+    restart: unless-stopped
+    networks: [mnnet]
+
+  # --------- Node 1 ---------
+  multinode-node-1:
+    build:
+      context: .
+      dockerfile: docker/multinode-node/Dockerfile.multinode_node
+    image: multinode/node:latest
+    container_name: multinode-node-1
+    environment:
+      NODE_ID: n1
+      HOST: 0.0.0.0
+      PORT: "9001"
+      # Symmetric seeding helps faster convergence / redundancy
+      SEED_NODES: "multinode-node-0:9000 multinode-node-2:9002"
+      PRELOAD_MODELS: "opt-2.7b"
+      GOSSIP_INTERVAL: "1.0"
+      WORKER_TIMEOUT: "10.0"
+      VERBOSE: "true"
+      USE_REAL_MODELS: "false"
+      GCS_BUCKET: "remote_model"
+      MODEL_CACHE_DIR: "/tmp/model_cache"
+      DEVICE: "cpu"
+    ports:
+      - "9001:9001/udp"
+      - "9001:9001/tcp"
+    depends_on:
+      - multinode-node-0
+    restart: unless-stopped
+    networks: [mnnet]
+
+  # --------- Node 2 ---------
+  multinode-node-2:
+    build:
+      context: .
+      dockerfile: docker/multinode-node/Dockerfile.multinode_node
+    image: multinode/node:latest
+    container_name: multinode-node-2
+    environment:
+      NODE_ID: n2
+      HOST: 0.0.0.0
+      PORT: "9002"
+      SEED_NODES: "multinode-node-0:9000 multinode-node-1:9001"
+      PRELOAD_MODELS: "opt-1.3b"
+      GOSSIP_INTERVAL: "1.0"
+      WORKER_TIMEOUT: "10.0"
+      VERBOSE: "true"
+      USE_REAL_MODELS: "false"
+      GCS_BUCKET: "remote_model"
+      MODEL_CACHE_DIR: "/tmp/model_cache"
+      DEVICE: "cpu"
+    ports:
+      - "9002:9002/udp"
+      - "9002:9002/tcp"
+    depends_on:
+      - multinode-node-0
+    restart: unless-stopped
+    networks: [mnnet]
+
+  # --------- Load Generator ---------
+  multinode-loadgen:
+    build:
+      context: .
+      dockerfile: docker/multinode-loadgen/Dockerfile.multinode_loadgen
+    image: multinode/loadgen:latest
+    container_name: multinode-loadgen
+    environment:
+      ENTRY_HOST: "multinode-node-0"
+      ENTRY_PORT: "9000"
+      RPS: "5.0"
+      CV: "8.0"
+      DURATION: "60.0"
+      # Optionally bake sample datasets at build and set these:
+      # GSM8K_PATH: "/app/data/gsm8k.jsonl"
+      # SHAREGPT_PATH: "/app/data/sharegpt.json"
+      LOG_LEVEL: "INFO"
+    depends_on:
+      - multinode-node-0
+      - multinode-node-1
+      - multinode-node-2
+    restart: "no"
+    networks: [mnnet]
+
+networks:
+  mnnet:
+    driver: bridge
