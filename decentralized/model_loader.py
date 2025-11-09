@@ -260,7 +260,7 @@ class ModelLoader:
             tokenizer = AutoTokenizer.from_pretrained(str(local_model_path))
             model = AutoModelForCausalLM.from_pretrained(
                 str(local_model_path),
-                torch_dtype=torch.float16 if self.device.startswith('cuda') else torch.float32,
+                dtype=torch.float16 if self.device.startswith('cuda') else torch.float32,
                 device_map=self.device if self.device.startswith('cuda') else None,
                 low_cpu_mem_usage=True
             )
