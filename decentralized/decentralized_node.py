@@ -48,6 +48,7 @@ class DecentralizedNode:
         cache_dir: str = "/tmp/model_cache",
         device: str = "cpu",
         enable_metrics: bool = True,
+        enable_gpu_metrics: bool = False,
         metrics_interval: float = 1.0,
         metrics_log_file: Optional[str] = None
     ):
@@ -67,6 +68,7 @@ class DecentralizedNode:
             cache_dir: Local cache directory for models
             device: PyTorch device ('cpu', 'cuda', etc.)
             enable_metrics: Enable system metrics collection
+            enable_gpu_metrics: Enable GPU metrics (requires NVIDIA GPU and pynvml)
             metrics_interval: Seconds between metric collections
             metrics_log_file: Optional file to log metrics (JSON format)
         """
@@ -113,7 +115,7 @@ class DecentralizedNode:
             self.metrics_collector = MetricsCollector(
                 node_id=node_id,
                 collection_interval=metrics_interval,
-                enable_gpu=True,
+                enable_gpu=enable_gpu_metrics,
                 log_to_file=metrics_log_file,
                 verbose=False
             )
@@ -663,6 +665,8 @@ def main():
                         help="PyTorch device (cpu, cuda, cuda:0, etc.)")
     parser.add_argument("--enable-metrics", action="store_true", default=True,
                         help="Enable metrics collection")
+    parser.add_argument("--disable-gpu-metrics", action="store_true",
+                        help="Disable GPU metrics collection")
     parser.add_argument("--metrics-interval", type=float, default=1.0,
                         help="Metrics collection interval (seconds)")
     parser.add_argument("--metrics-log", type=str,
@@ -698,6 +702,7 @@ def main():
         cache_dir=args.cache_dir,
         device=args.device,
         enable_metrics=args.enable_metrics,
+        enable_gpu_metrics=not args.disable_gpu_metrics,
         metrics_interval=args.metrics_interval,
         metrics_log_file=args.metrics_log
     )

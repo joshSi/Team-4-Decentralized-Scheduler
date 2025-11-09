@@ -104,6 +104,9 @@ class MetricsCollector:
         self.log_to_file = log_to_file
         self.verbose = verbose
         
+        # Initialize logger first
+        self.logger = logging.getLogger(f"MetricsCollector-{node_id}")
+        
         # Process handle
         self.process = psutil.Process()
         
@@ -126,7 +129,6 @@ class MetricsCollector:
         self._last_net_io = None
         self._last_collection_time = None
         
-        self.logger = logging.getLogger(f"MetricsCollector-{node_id}")
         if self.verbose:
             self.logger.info(f"Metrics collector initialized for {node_id}")
     
@@ -141,9 +143,10 @@ class MetricsCollector:
             self.nvml_initialized = True
             self.logger.info("GPU monitoring enabled (NVIDIA)")
         except ImportError:
-            self.logger.warning("pynvml not installed. GPU metrics disabled. Install: pip install nvidia-ml-py3")
+            self.logger.info("pynvml not installed. GPU metrics disabled. Install: pip install nvidia-ml-py3")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize GPU monitoring: {e}")
+            # This catches NVML library not found, no GPU, etc.
+            self.logger.info(f"GPU monitoring not available: {e}")
     
     def _collect_cpu_metrics(self) -> Dict[str, Any]:
         """Collect CPU metrics."""
