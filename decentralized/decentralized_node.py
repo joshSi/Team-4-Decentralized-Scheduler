@@ -2,8 +2,8 @@
 Decentralized gossip-based node for peer-to-peer scheduling.
 
 This node acts as both a worker and a scheduler:
-- Maintains own worker state (loaded models, queue depth, etc.)
-- Gossips state with peer nodes, maintains eventual consistency
+- Maintains its own worker state (loaded models, queue depth, etc.)
+- Gossips state with peer nodes to maintain eventual consistency
 - Accepts schedule requests from clients and makes placement decisions
 - Uses UDP and pickle serialization matching the existing architecture
 """
@@ -21,6 +21,8 @@ from contracts import (
     ScheduleResponse,
     PlacementAction
 )
+from system_metrics import MetricsCollector
+from model_loader import ModelLoader
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(threadName)s] %(message)s')
 
@@ -44,10 +46,13 @@ class GossipNode:
         seed_nodes: List[Tuple[str, int]] = None,
         gossip_interval: float = 1.0,
         worker_timeout: float = 10.0,
+        enable_metrics: bool = True,
+        metrics_interval: float = 1.0,
+        metrics_log_file: Optional[str] = None,
         verbose: bool = True
     ):
         """
-        Initialize the gossip node.
+        Initialize gossip node.
 
         Args:
             node_id: Unique identifier for this node
@@ -56,6 +61,9 @@ class GossipNode:
             seed_nodes: List of (host, port) for initial peers
             gossip_interval: Seconds between gossip rounds
             worker_timeout: Time after which a peer is considered dead
+            enable_metrics: Enable system metrics collection
+            metrics_interval: Seconds between metric collections
+            metrics_log_file: Optional file to log metrics (JSON format)
             verbose: Enable detailed logging
         """
         self.node_id = node_id
@@ -82,6 +90,17 @@ class GossipNode:
         self.cache_hits = 0
         self.cache_misses = 0
 
+        # Metrics collection
+        self.metrics_collector = None
+        if enable_metrics:
+            self.metrics_collector = MetricsCollector(
+                node_id=node_id,
+                collection_interval=metrics_interval,
+                enable_gpu=True,
+                log_to_file=metrics_log_file,
+                verbose=False  # Don't print metrics each time
+            )
+
         # Networking
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.is_running = True
@@ -97,9 +116,17 @@ class GossipNode:
 
     def _create_own_report(self) -> WorkerLoadReport:
         """Generate a load report for this node."""
+        # Update memory utilization from metrics if available
+        if self.metrics_collector:
+            try:
+                metrics = self.metrics_collector.collect_metrics()
+                self.memory_utilization = metrics.process_memory_percent / 100.0
+            except:
+                pass  # Keep current value if collection fails
+        
         return WorkerLoadReport(
             node_id=self.node_id,
-            models_loaded=self.loaded_models.copy(),
+            models_loaded=self.get_loaded_models(),
             queue_depth=self.queue_depth,
             memory_utilization=self.memory_utilization,
             is_ready=self.is_ready,
@@ -421,27 +448,55 @@ class GossipNode:
 
     def load_model(self, model_id: str):
         """
-        Load a model (simulated).
+        Load a model (real or simulated).
         
         Args:
-            model_id: Model identifier
+            model_id: Model identifier (e.g., 'opt-1.3b', 'opt-2.7b')
         """
         with self.state_lock:
-            if model_id not in self.loaded_models:
-                self.loaded_models.append(model_id)
-                self.logger.info(f"Loaded model: {model_id}")
+            if self.use_real_models:
+                self.logger.info(f"Loading real model: {model_id}")
+                success = self.model_loader.load_model(model_id)
+                if success:
+                    self.logger.info(f"Successfully loaded model: {model_id}")
+                else:
+                    self.logger.error(f"Failed to load model: {model_id}")
+                return success
+            else:
+                # Simulated loading
+                if model_id not in self._simulated_models:
+                    self._simulated_models.append(model_id)
+                    self.logger.info(f"Loaded simulated model: {model_id}")
+                return True
 
     def unload_model(self, model_id: str):
         """
-        Unload a model (simulated).
+        Unload a model (real or simulated).
         
         Args:
             model_id: Model identifier
         """
         with self.state_lock:
-            if model_id in self.loaded_models:
-                self.loaded_models.remove(model_id)
-                self.logger.info(f"Unloaded model: {model_id}")
+            if self.use_real_models:
+                success = self.model_loader.unload_model(model_id)
+                if success:
+                    self.logger.info(f"Unloaded model: {model_id}")
+                else:
+                    self.logger.error(f"Failed to unload model: {model_id}")
+                return success
+            else:
+                # Simulated unloading
+                if model_id in self._simulated_models:
+                    self._simulated_models.remove(model_id)
+                    self.logger.info(f"Unloaded simulated model: {model_id}")
+                return True
+    
+    def get_loaded_models(self) -> List[str]:
+        """Get list of currently loaded models."""
+        if self.use_real_models:
+            return self.model_loader.get_loaded_models()
+        else:
+            return self._simulated_models.copy()
 
     def set_queue_depth(self, depth: int):
         """Update queue depth."""
@@ -493,6 +548,11 @@ class GossipNode:
         self.sock.bind(self.addr)
         self.logger.info(f"Node {self.node_id} bound to {self.addr}")
 
+        # Start metrics collection
+        if self.metrics_collector:
+            self.metrics_collector.start()
+            self.logger.info(f"Started metrics collection for {self.node_id}")
+
         self._listener_thread = threading.Thread(
             target=self._listener,
             name=f"{self.node_id}-Listener"
@@ -512,6 +572,21 @@ class GossipNode:
             return
 
         self.is_running = False
+        
+        # Stop metrics collection
+        if self.metrics_collector:
+            self.metrics_collector.stop()
+            
+            # Print metrics summary
+            if self.verbose:
+                stats = self.metrics_collector.get_summary_stats()
+                print(f"\n=== Metrics Summary for {self.node_id} ===")
+                for key, value in stats.items():
+                    if isinstance(value, float):
+                        print(f"{key}: {value:.2f}")
+                    else:
+                        print(f"{key}: {value}")
+        
         self.sock.close()
 
         if self._gossip_thread:
@@ -539,7 +614,7 @@ class GossipNode:
                     report, ts, addr = self.cluster_state[node_id]
                     peer_data[node_id] = (report.to_dict(), ts, addr)
 
-            return {
+            state = {
                 "node_id": self.node_id,
                 "num_active_peers": len(active_peers),
                 "num_ready_peers": ready_peers,
@@ -552,6 +627,23 @@ class GossipNode:
                 "cluster_avg_memory": avg_memory,
                 "peers": peer_data
             }
+            
+            # Add current metrics if available
+            if self.metrics_collector:
+                try:
+                    current_metrics = self.metrics_collector.collect_metrics()
+                    state["current_metrics"] = {
+                        "cpu_percent": current_metrics.cpu_percent,
+                        "process_cpu_percent": current_metrics.process_cpu_percent,
+                        "memory_percent": current_metrics.memory_percent,
+                        "process_memory_mb": current_metrics.process_memory_mb,
+                        "gpu_utilization": current_metrics.gpu_utilization,
+                        "gpu_memory_percent": current_metrics.gpu_memory_percent
+                    }
+                except:
+                    pass
+            
+            return state
 
     def print_cluster_state(self):
         """Print human-readable cluster state."""
@@ -562,6 +654,16 @@ class GossipNode:
         print(f"Cache Hit Rate: {state['cache_hit_rate']:.2%}")
         print(f"Cluster Queue Depth: {state['cluster_total_queue']}")
         print(f"Cluster Avg Memory: {state['cluster_avg_memory']:.2%}")
+        
+        # Print current metrics if available
+        if "current_metrics" in state:
+            m = state["current_metrics"]
+            print(f"\nCurrent System Metrics:")
+            print(f"  CPU: {m['cpu_percent']:.1f}% (process: {m['process_cpu_percent']:.1f}%)")
+            print(f"  Memory: {m['memory_percent']:.1f}% (process: {m['process_memory_mb']:.1f} MB)")
+            if m['gpu_utilization'] is not None:
+                print(f"  GPU: {m['gpu_utilization']:.1f}% util, {m['gpu_memory_percent']:.1f}% mem")
+        
         print("\nPeer States:")
         for node_id, (data, ts, addr) in state['peers'].items():
             status = "✓" if data.get('is_ready', False) else "✗"
@@ -598,9 +700,51 @@ def main():
         "--preload-models",
         nargs='+',
         default=[],
-        help="Models to load on startup"
+        help="Models to load on startup (e.g., opt-1.3b opt-2.7b)"
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
+    parser.add_argument(
+        "--use-real-models",
+        action="store_true",
+        help="Use real PyTorch models (default: simulated)"
+    )
+    parser.add_argument(
+        "--gcs-bucket",
+        default="remote_model",
+        help="GCS bucket for models"
+    )
+    parser.add_argument(
+        "--cache-dir",
+        default="/tmp/model_cache",
+        help="Local cache directory for models"
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="PyTorch device (cpu, cuda, cuda:0, etc.)"
+    )
+    parser.add_argument(
+        "--enable-metrics",
+        action="store_true",
+        default=True,
+        help="Enable metrics collection"
+    )
+    parser.add_argument(
+        "--metrics-interval",
+        type=float,
+        default=1.0,
+        help="Metrics collection interval (seconds)"
+    )
+    parser.add_argument(
+        "--metrics-log",
+        type=str,
+        help="Log metrics to file (JSON format)"
+    )
+    parser.add_argument(
+        "--metrics-csv",
+        type=str,
+        help="Export metrics to CSV on shutdown"
+    )
 
     args = parser.parse_args()
 
@@ -623,12 +767,25 @@ def main():
         port=args.port,
         seed_nodes=seed_node_list,
         gossip_interval=args.gossip_interval,
+        use_real_models=args.use_real_models,
+        gcs_bucket=args.gcs_bucket,
+        cache_dir=args.cache_dir,
+        device=args.device,
+        enable_metrics=args.enable_metrics,
+        metrics_interval=args.metrics_interval,
+        metrics_log_file=args.metrics_log,
         verbose=args.verbose
     )
 
     def signal_handler(sig, frame):
         print(f"\n\nShutting down node {args.node_id}...")
         node.print_cluster_state()
+        
+        # Export metrics to CSV if requested
+        if args.metrics_csv and node.metrics_collector:
+            node.metrics_collector.export_to_csv(args.metrics_csv)
+            print(f"Exported metrics to {args.metrics_csv}")
+        
         node.stop()
         exit(0)
 
