@@ -23,7 +23,7 @@ fastapi
 uvicorn
 requests
 pydantic
-vllm>=facebook/opt-125m
+# vllm>=facebook/opt-125m
 # transformers
 # torch
 pynvml
