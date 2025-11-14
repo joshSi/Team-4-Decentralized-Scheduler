@@ -31,19 +31,56 @@ def main():
 
     # Get configuration
     worker_id = config.get_worker_id()
-    coordinator_host, coordinator_port = config.get_coordinator_address()
 
-    logger.info(f"Starting worker: {worker_id}")
-    logger.info(f"Coordinator: {coordinator_host}:{coordinator_port}")
+    # Initialize gossip node if in gossip mode
+    gossip_node = None
+    if config.is_gossip_mode():
+        from udpnode import Node
+
+        logger.info(f"Starting gossip worker: {worker_id}")
+        logger.info(f"Scheduler mode: gossip")
+        logger.info(f"Gossip port: {config.GOSSIP_PORT}")
+
+        # Create gossip node for peer-to-peer communication
+        gossip_node = Node(
+            node_id=worker_id,
+            host=config.BIND_HOST,
+            port=config.GOSSIP_PORT,
+            time_to_failure=config.GOSSIP_TIME_TO_FAILURE,
+            verbose=(config.LOG_LEVEL == "DEBUG")
+        )
+
+        # Add configured peers
+        peers = config.get_gossip_peers()
+        logger.info(f"Configured peers: {peers}")
+        for peer_host, peer_port in peers:
+            # Extract peer ID from hostname
+            peer_id = peer_host.split(".")[0]  # gossip-worker-1.gossip-network -> gossip-worker-1
+            gossip_node.add_peer(peer_id, peer_host, peer_port)
+
+        # Start gossip protocol
+        gossip_node.start(gossip_interval=config.GOSSIP_INTERVAL)
+        logger.info(f"Gossip protocol started on port {config.GOSSIP_PORT}")
+    else:
+        coordinator_host, coordinator_port = config.get_coordinator_address()
+        logger.info(f"Starting worker: {worker_id}")
+        logger.info(f"Coordinator: {coordinator_host}:{coordinator_port}")
 
     # Create worker node
+    if config.is_gossip_mode():
+        coordinator_host, coordinator_port = None, None
+        report_interval = 0.0  # Disable reporting in gossip mode
+    else:
+        coordinator_host, coordinator_port = config.get_coordinator_address()
+        report_interval = config.REPORT_INTERVAL
+
     worker = WorkerNode(
         node_id=worker_id,
         host=config.BIND_HOST,
         port=config.WORKER_PORT,
         coordinator_host=coordinator_host,
         coordinator_port=coordinator_port,
-        report_interval=config.REPORT_INTERVAL,
+        report_interval=report_interval,
         verbose=(config.LOG_LEVEL == "DEBUG"),
         use_real_models=config.USE_REAL_MODELS,
         gcs_bucket=config.GCS_BUCKET,
@@ -54,6 +91,8 @@ def main():
     # Setup signal handlers for graceful shutdown
     def shutdown_handler(signum, frame):
         logger.info(f"Received signal {signum}, shutting down gracefully...")
+        if gossip_node:
+            gossip_node.stop()
         worker.stop()
         sys.exit(0)
 
@@ -96,6 +135,15 @@ def main():
         else:
             # Only use random values in simulation mode
             worker.set_memory_utilization(random.uniform(0.1, 0.3))
+
+        # Publish worker state to gossip network if in gossip mode
+        if config.is_gossip_mode() and gossip_node:
+            gossip_node.set_data(f"{worker_id}_models", worker.get_loaded_models())
+            gossip_node.set_data(f"{worker_id}_ready", worker.is_ready)
+            gossip_node.set_data(f"{worker_id}_memory", worker._get_memory_utilization())
+            gossip_node.set_data(f"{worker_id}_queue", 0)
+            logger.info(f"Published worker state to gossip network")
+
     else:
         logger.warning("Not in docker/kubernetes mode, skipping model initialization")
 
@@ -105,7 +153,11 @@ def main():
     logger.info(f"Worker ready: {worker.is_ready}, models loaded: {worker.get_loaded_models()}")
 
     # Keep running
-    logger.info("Worker ready and reporting to coordinator")
+    if config.is_gossip_mode():
+        logger.info("Gossip worker ready - using decentralized scheduling")
+    else:
+        logger.info("Worker ready and reporting to coordinator")
+
     signal.pause()  # Wait for signals
 
 

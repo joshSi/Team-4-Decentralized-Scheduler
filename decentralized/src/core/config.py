@@ -40,6 +40,14 @@ class Config:
     # Deployment Mode
     DEPLOYMENT_MODE: str = os.getenv("DEPLOYMENT_MODE", "local")  # local, docker, kubernetes
 
+    # Scheduler Mode
+    SCHEDULER_MODE: str = os.getenv("SCHEDULER_MODE", "centralized")  # centralized, gossip
+
+    # Gossip Configuration
+    GOSSIP_PORT: int = int(os.getenv("GOSSIP_PORT", "9000"))
+    GOSSIP_TIME_TO_FAILURE: int = int(os.getenv("GOSSIP_TIME_TO_FAILURE", "10"))
+    GOSSIP_PEERS: str = os.getenv("GOSSIP_PEERS", "")  # Comma-separated list of host:port
+
     # Model Loading Configuration
     USE_REAL_MODELS: bool = os.getenv("USE_REAL_MODELS", "false").lower() == "true"
     GCS_BUCKET: str = os.getenv("GCS_BUCKET", "remote_model")
@@ -67,6 +75,29 @@ class Config:
     def is_containerized(cls) -> bool:
         """Check if running in a container."""
         return cls.DEPLOYMENT_MODE in ["docker", "kubernetes"]
+
+    @classmethod
+    def is_gossip_mode(cls) -> bool:
+        """Check if using gossip scheduler mode."""
+        return cls.SCHEDULER_MODE == "gossip"
+
+    @classmethod
+    def get_gossip_peers(cls) -> list[tuple[str, int]]:
+        """Parse gossip peers from environment variable.
+
+        Returns:
+            List of (host, port) tuples
+        """
+        if not cls.GOSSIP_PEERS:
+            return []
+
+        peers = []
+        for peer_str in cls.GOSSIP_PEERS.split(","):
+            peer_str = peer_str.strip()
+            if ":" in peer_str:
+                host, port = peer_str.split(":")
+                peers.append((host.strip(), int(port.strip())))
+        return peers
 
     @classmethod
     def print_config(cls):

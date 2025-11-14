@@ -122,7 +122,7 @@ class UDPCentralCoordinator:
                 )
 
         except Exception as e:
-            self.logger.error(f"Error handling worker report: {e}")
+            self.logger.error(f"Error handling worker report: {e}", exc_info=True)
 
     def _handle_schedule_request(self, payload: Dict, sender_addr: Tuple[str, int]):
         """Handle schedule request and send response."""

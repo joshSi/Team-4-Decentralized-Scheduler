@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # Gossip Worker 1
+  gossip-worker-1:
+    build:
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
+    container_name: gossip-worker-1
+    hostname: gossip-worker-1
+    environment:
+      - WORKER_ID=gossip-worker-1
+      - WORKER_PORT=8001
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=DEBUG
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - SCHEDULER_MODE=gossip
+      # Gossip-specific settings
+      - GOSSIP_PORT=9001
+      - GOSSIP_INTERVAL=1.0
+      - GOSSIP_TIME_TO_FAILURE=10
+      - GOSSIP_PEERS=gossip-worker-2:9002,gossip-worker-3:9003
+    volumes:
+      - gossip-model-cache-1:/tmp/model_cache
+    networks:
+      - gossip-network
+    restart: unless-stopped
+
+  # Gossip Worker 2
+  gossip-worker-2:
+    build:
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
+    container_name: gossip-worker-2
+    hostname: gossip-worker-2
+    environment:
+      - WORKER_ID=gossip-worker-2
+      - WORKER_PORT=8002
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=DEBUG
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - SCHEDULER_MODE=gossip
+      # Gossip-specific settings
+      - GOSSIP_PORT=9002
+      - GOSSIP_INTERVAL=1.0
+      - GOSSIP_TIME_TO_FAILURE=10
+      - GOSSIP_PEERS=gossip-worker-1:9001,gossip-worker-3:9003
+    volumes:
+      - gossip-model-cache-2:/tmp/model_cache
+    networks:
+      - gossip-network
+    restart: unless-stopped
+
+  # Gossip Worker 3
+  gossip-worker-3:
+    build:
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
+    container_name: gossip-worker-3
+    hostname: gossip-worker-3
+    environment:
+      - WORKER_ID=gossip-worker-3
+      - WORKER_PORT=8003
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=DEBUG
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - SCHEDULER_MODE=gossip
+      # Gossip-specific settings
+      - GOSSIP_PORT=9003
+      - GOSSIP_INTERVAL=1.0
+      - GOSSIP_TIME_TO_FAILURE=10
+      - GOSSIP_PEERS=gossip-worker-1:9001,gossip-worker-2:9002
+    volumes:
+      - gossip-model-cache-3:/tmp/model_cache
+    networks:
+      - gossip-network
+    restart: unless-stopped
+
+  # Load Generator for Gossip
+  gossip-load-generator:
+    build:
+      context: ../..
+      dockerfile: docker/loadgen/Dockerfile.loadgen
+    container_name: gossip-load-generator
+    hostname: gossip-load-generator
+    environment:
+      - SCHEDULER_MODE=gossip
+      - WORKER_HOSTS=gossip-worker-1:8001,gossip-worker-2:8002,gossip-worker-3:8003
+      - TARGET_RPS=5.0
+      - CV=8.0
+      - DURATION=300.0
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+    depends_on:
+      - gossip-worker-1
+      - gossip-worker-2
+      - gossip-worker-3
+    networks:
+      - gossip-network
+    restart: "no"  # Only run once
+
+networks:
+  gossip-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16
+
+volumes:
+  gossip-model-cache-1:
+  gossip-model-cache-2:
+  gossip-model-cache-3:
+
+# For scaling workers:
+# docker-compose -f docker-compose-gossip.yml up --scale gossip-worker-1=5
