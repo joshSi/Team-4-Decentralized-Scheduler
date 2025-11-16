@@ -146,24 +146,28 @@ class DecentralizedNode:
 
     def _get_random_peer(self) -> Optional[Tuple[str, int]]:
         """
-        Get a random peer from the cluster state (excluding self).
-        Falls back to a seed node if no other peers are known.
+        Get a random peer from the cluster state or seed nodes (excluding self).
         """
         with self.state_lock:
-            # Get addresses from all known peers, excluding ourselves
-            peer_addresses = [
+            # Get addresses from all known peers (excluding self)
+            peer_addresses = {
                 addr for wid, (_, _, addr) in self.cluster_state.items()
                 if wid != self.node_id
-            ]
+            }
 
-            if peer_addresses:
-                # We know other peers, pick one at random
-                return random.choice(peer_addresses)
-            elif self.seed_nodes:
-                # We don't know any peers yet, pick a seed to bootstrap
-                return random.choice(self.seed_nodes)
+            # Add all seed nodes to this set of potential targets.
+            # Using a set automatically handles any duplicates.
+            all_possible_peers = peer_addresses.union(self.seed_nodes)
+
+            # Remove self address to prevent gossiping to self,
+            # which could happen if listed as a seed node.
+            all_possible_peers.discard(self.addr)
+
+            if all_possible_peers:
+                # At least one valid peer, pick one at random
+                return random.choice(list(all_possible_peers))
             else:
-                # Isolated node
+                # Isolated node (no peers, and seed list was empty or only contained self)
                 return None
             
     def _create_own_report(self) -> WorkerLoadReport:
@@ -765,16 +769,6 @@ def main():
             print(f"\nFault Injection Stats:")
             print(f"  Failures Injected: {stats['failures_injected']}/{stats['faults_scheduled']}")
             print(f"  Recoveries Completed: {stats['recoveries_completed']}")
-            
-            # Print timing metrics
-            timing = fault_controller.get_timing_metrics()
-            if timing:
-                print(f"\nTiming Metrics:")
-                for i, m in enumerate(timing, 1):
-                    print(f"  Fault {i} ({m['fault_type']}):")
-                    print(f"    Scheduled: t+{m['scheduled_offset']}s for {m['scheduled_duration']}s")
-                    if m['actual_downtime']:
-                        print(f"    Actual downtime: {m['actual_downtime']:.2f}s")
         
         # Print cluster state
         try:
