@@ -114,11 +114,10 @@ class LoadGenerator:
         return False
 
     def run(self):
-        """Execute the load generation."""
         logger.info("=" * 70)
         logger.info("STARTING LOAD GENERATION")
         logger.info("=" * 70)
-        
+
         if not self.wait_for_ready_workers(timeout=120):
             logger.error("Cluster not responding. Aborting load generation.")
             return
@@ -131,58 +130,39 @@ class LoadGenerator:
             wait_time = req.timestamp - current_time
             if wait_time > 0:
                 time.sleep(wait_time)
-
             if time.time() - start_time > self.duration:
                 logger.info("Duration exceeded, stopping load generation")
                 break
 
-            # Send request and track timing
-            request_start = time.time()
-            response = self.client.request_schedule(
-                request_id=req.request_id,
-                model_required=req.model_id
-            )
-            request_end = time.time()
-
+            request_start_time = time.time() # Start timer for this request
+            response = self.client.request_schedule(request_id=req.request_id, model_required=req.model_id)
+            latency = time.time() - request_start_time # End timer
+            
             self.total_requests += 1
-
-            # Record per-request result
-            result = {
-                'request_id': req.request_id,
-                'model_id': req.model_id,
-                'timestamp': current_time,
-                'latency': request_end - request_start,
-                'success': response is not None
-            }
 
             if response:
                 self.successful_requests += 1
-                result['worker_id'] = response.worker_id
-                result['action'] = response.action.value
-                result['estimated_wait_time'] = response.estimated_wait_time
-                result['reason'] = response.reason
-                
                 if response.action.value == "serve":
                     self.cache_hits += 1
                 elif response.action.value == "cold_start":
                     self.cache_misses += 1
                 
-                if self.total_requests % 100 == 0:
-                    logger.info(
-                        f"Req {self.total_requests}: {req.request_id} ({req.model_id}) "
-                        f"→ {response.worker_id} ({response.action.value})"
-                    )
+                # --- BEGIN DEMO OUTPUT ---
+                # This is the new block you requested
+                # We print this for every successful request
+                print(f"\n--- 🤖 Inference Request Demo ---")
+                print(f"  Request:  'Run inference for {req.model_id}' (ID: {req.request_id[:8]})")
+                print(f"  Response: Routed to {response.worker_id}")
+                print(f"  Action:   {response.action.value}")
+                print(f"  Reason:   {response.reason}")
+                print(f"  (Latency: {latency*1000:.2f} ms)")
+                print(f"----------------------------------\n")
+                # --- END DEMO OUTPUT ---
+                
             else:
                 self.failed_requests += 1
-                result['worker_id'] = None
-                result['action'] = 'failed'
-                result['estimated_wait_time'] = None
-                result['reason'] = 'No response'
-                
                 if self.failed_requests % 10 == 0:
                     logger.warning(f"Failed request count: {self.failed_requests}")
-            
-            self.request_results.append(result)
 
         elapsed = time.time() - start_time
         self.print_statistics(elapsed)
