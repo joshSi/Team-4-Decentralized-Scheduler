@@ -53,7 +53,7 @@ class WorkloadGenerator:
         self.target_rps = target_rps
         self.cv = cv
         self.duration = duration
-        self.models = models or ['opt-1.3b', 'opt-2.7b']
+        self.models = models or ['opt-125m', 'opt-350m']
         self.logger = logging.getLogger("WorkloadGenerator")
 
         if seed is not None:

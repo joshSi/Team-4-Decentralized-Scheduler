@@ -60,7 +60,7 @@ class LoadGenerator:
         logger.info("Generating workload trace...")
         self.workload_generator = WorkloadGenerator(
             target_rps=target_rps, cv=cv, duration=duration,
-            models=['opt-125m', 'opt-350m'], seed=42
+            models=['gpt2', 'facebook/opt-125m', 'facebook/opt-350m'], seed=42
         )
         self.trace = self.workload_generator.generate_trace(dataset_samples=self.mixed_workload)
         logger.info(f"Trace generated: {len(self.trace)} requests")
@@ -208,7 +208,6 @@ class LoadGenerator:
         logger.info("=" * 70)
 
     def save_results(self, elapsed: float):
-        """NEW: Save experiment results to JSON file."""
         results = {
             'experiment_info': {
                 'timestamp': datetime.now().isoformat(),
