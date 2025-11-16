@@ -7,10 +7,12 @@ import random
 import logging
 import sys
 import argparse
+import json
+from datetime import datetime
 from typing import List, Dict
 from dataset_loader import DatasetLoader
 from workload_generator import WorkloadGenerator, RequestTrace
-from client import ClusterClient  # <-- MODIFIED: Use new client
+from client import ClusterClient
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s')
 logger = logging.getLogger("LoadGenerator")
@@ -29,7 +31,8 @@ class LoadGenerator:
         cv: float = 8.0,
         duration: float = 300.0,
         gsm8k_path: str = None,
-        sharegpt_path: str = None
+        sharegpt_path: str = None,
+        output_file: str = None
     ):
         """
         Initialize load generator.
@@ -37,17 +40,18 @@ class LoadGenerator:
         Args:
             entry_node_host: Host of one node in the cluster
             entry_node_port: Port of one node in the cluster
-            ... (other args unchanged)
+            output_file: Path to save results JSON (auto-generated if None)
         """
         self.target_rps = target_rps
         self.cv = cv
         self.duration = duration
+        self.entry_node_host = entry_node_host
+        self.entry_node_port = entry_node_port
 
         logger.info(f"Initializing load generator: RPS={target_rps}, CV={cv}, Duration={duration}s")
         logger.info(f"Cluster Entry Node: {entry_node_host}:{entry_node_port}")
 
-        # --- MODIFIED: Load datasets and generate workload ---
-        # (Dataset and workload generation logic is unchanged)
+        # Dataset and workload generation
         logger.info("Loading datasets...")
         self.dataset_loader = DatasetLoader(max_tokens=2048, samples_per_dataset=4000)
         self.dataset_loader.load_gsm8k(gsm8k_path)
@@ -56,13 +60,12 @@ class LoadGenerator:
         logger.info("Generating workload trace...")
         self.workload_generator = WorkloadGenerator(
             target_rps=target_rps, cv=cv, duration=duration,
-            models=['opt-1.3b', 'opt-2.7b'], seed=42
+            models=['opt-125m', 'opt-350m'], seed=42
         )
         self.trace = self.workload_generator.generate_trace(dataset_samples=self.mixed_workload)
         logger.info(f"Trace generated: {len(self.trace)} requests")
-        # --- END UNCHANGED SECTION ---
 
-        # --- MODIFIED: Create a simple client ---
+        # Create client
         self.client = ClusterClient(
             entry_nodes=[(entry_node_host, entry_node_port)],
             request_timeout=2.0
@@ -74,6 +77,14 @@ class LoadGenerator:
         self.failed_requests = 0
         self.cache_hits = 0
         self.cache_misses = 0
+        
+        self.request_results = []
+        
+        if output_file:
+            self.output_file = output_file
+        else:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.output_file = f"results_{timestamp}.json"
 
     def wait_for_ready_workers(self, timeout: int = 300):
         """
@@ -84,7 +95,6 @@ class LoadGenerator:
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                # Query cluster with a test request
                 response = self.client.request_schedule(
                     request_id="readiness-check",
                     model_required="opt-1.3b",
@@ -108,8 +118,6 @@ class LoadGenerator:
         logger.info("=" * 70)
         logger.info("STARTING LOAD GENERATION")
         logger.info("=" * 70)
-
-        # --- MODIFIED: No client.start() needed ---
         
         if not self.wait_for_ready_workers(timeout=120):
             logger.error("Cluster not responding. Aborting load generation.")
@@ -128,16 +136,32 @@ class LoadGenerator:
                 logger.info("Duration exceeded, stopping load generation")
                 break
 
-            # --- MODIFIED: Use client.request_schedule ---
+            # Send request and track timing
+            request_start = time.time()
             response = self.client.request_schedule(
                 request_id=req.request_id,
                 model_required=req.model_id
             )
+            request_end = time.time()
 
             self.total_requests += 1
 
+            # Record per-request result
+            result = {
+                'request_id': req.request_id,
+                'model_id': req.model_id,
+                'timestamp': current_time,
+                'latency': request_end - request_start,
+                'success': response is not None
+            }
+
             if response:
                 self.successful_requests += 1
+                result['worker_id'] = response.worker_id
+                result['action'] = response.action.value
+                result['estimated_wait_time'] = response.estimated_wait_time
+                result['reason'] = response.reason
+                
                 if response.action.value == "serve":
                     self.cache_hits += 1
                 elif response.action.value == "cold_start":
@@ -150,17 +174,22 @@ class LoadGenerator:
                     )
             else:
                 self.failed_requests += 1
+                result['worker_id'] = None
+                result['action'] = 'failed'
+                result['estimated_wait_time'] = None
+                result['reason'] = 'No response'
+                
                 if self.failed_requests % 10 == 0:
                     logger.warning(f"Failed request count: {self.failed_requests}")
+            
+            self.request_results.append(result)
 
         elapsed = time.time() - start_time
         self.print_statistics(elapsed)
-        
-        # --- MODIFIED: No client.stop() needed ---
+        self.save_results(elapsed)
 
     def print_statistics(self, elapsed: float):
         """Print final statistics."""
-        # (This function is unchanged)
         logger.info("")
         logger.info("=" * 70)
         logger.info("LOAD GENERATION COMPLETE")
@@ -178,11 +207,65 @@ class LoadGenerator:
             logger.info(f"Cache hit rate: {100 * self.cache_hits / (self.cache_hits + self.cache_misses):.2f}%")
         logger.info("=" * 70)
 
+    def save_results(self, elapsed: float):
+        """NEW: Save experiment results to JSON file."""
+        results = {
+            'experiment_info': {
+                'timestamp': datetime.now().isoformat(),
+                'entry_node': f"{self.entry_node_host}:{self.entry_node_port}",
+            },
+            'config': {
+                'target_rps': self.target_rps,
+                'cv': self.cv,
+                'duration': self.duration,
+                'total_trace_requests': len(self.trace)
+            },
+            'summary_metrics': {
+                'actual_duration_seconds': elapsed,
+                'total_requests_sent': self.total_requests,
+                'successful_requests': self.successful_requests,
+                'failed_requests': self.failed_requests,
+                'success_rate': self.successful_requests / self.total_requests if self.total_requests > 0 else 0,
+                'actual_rps': self.total_requests / elapsed if elapsed > 0 else 0,
+                'cache_hits': self.cache_hits,
+                'cache_misses': self.cache_misses,
+                'cache_hit_rate': self.cache_hits / (self.cache_hits + self.cache_misses) if (self.cache_hits + self.cache_misses) > 0 else 0
+            },
+            'per_request_results': self.request_results
+        }
+        
+        try:
+            with open(self.output_file, 'w') as f:
+                json.dump(results, f, indent=2)
+            logger.info(f"Results saved to: {self.output_file}")
+            
+            # Also save a CSV summary for easy analysis
+            csv_file = self.output_file.replace('.json', '_summary.csv')
+            self._save_csv_summary(csv_file)
+            logger.info(f"CSV summary saved to: {csv_file}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save results: {e}")
+
+    def _save_csv_summary(self, csv_file: str):
+        """Save per-request results as CSV."""
+        try:
+            import csv
+            with open(csv_file, 'w', newline='') as f:
+                if not self.request_results:
+                    return
+                
+                fieldnames = self.request_results[0].keys()
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(self.request_results)
+        except Exception as e:
+            logger.error(f"Failed to save CSV: {e}")
+
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Load Generator for Decentralized Cluster")
-    # --- MODIFIED: Renamed coordinator args to entry_node ---
     parser.add_argument("--entry-host", default="127.0.0.1", help="Cluster entry node host")
     parser.add_argument("--entry-port", type=int, default=9000, help="Cluster entry node port")
     parser.add_argument("--rps", type=float, default=10.0, help="Target requests per second")
@@ -190,6 +273,7 @@ def main():
     parser.add_argument("--duration", type=float, default=300.0, help="Duration in seconds")
     parser.add_argument("--gsm8k", type=str, help="Path to GSM8K dataset")
     parser.add_argument("--sharegpt", type=str, help="Path to ShareGPT dataset")
+    parser.add_argument("--output", type=str, help="Output file path (default: auto-generated)")
 
     args = parser.parse_args()
 
@@ -200,10 +284,10 @@ def main():
         cv=args.cv,
         duration=args.duration,
         gsm8k_path=args.gsm8k,
-        sharegpt_path=args.sharegpt
+        sharegpt_path=args.sharegpt,
+        output_file=args.output
     )
     
-    # ... (rest of main is unchanged) ...
     try:
         generator.run()
     except KeyboardInterrupt:
