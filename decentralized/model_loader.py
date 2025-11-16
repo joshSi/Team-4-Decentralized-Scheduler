@@ -246,8 +246,7 @@ class ModelLoader:
                 if not local_model_path.exists():
                     logger.info(f"Downloading {model_id} from HuggingFace...")
                     # HuggingFace will download and cache automatically
-                    hf_model_name = f"facebook/{model_id}"
-                    local_model_path = hf_model_name
+                    local_model_path = model_id
                 else:
                     logger.info(f"Using cached model at {local_model_path}")
 
