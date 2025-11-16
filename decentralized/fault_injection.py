@@ -159,7 +159,7 @@ class FaultInjectionController:
             # Pause gossip and scheduling (more complex, requires node cooperation)
             logger.info(f"Pausing {self.node.node_id}")
             self.node.is_running = False
-    
+
     def _recover_from_failure(self, fault: FaultEvent):
         """Recover from a failure injection."""
         logger.warning(f"♻️  RECOVERING FROM FAULT: {fault.mode.value}")
@@ -174,6 +174,12 @@ class FaultInjectionController:
             # Recreate socket
             import socket
             self.node.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            # --- THIS IS THE FIX ---
+            # Allow address to be reused immediately, preventing [Errno 98]
+            self.node.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # -----------------------
+
             self.node.is_running = True
             
             # Restart the node
@@ -186,20 +192,24 @@ class FaultInjectionController:
             logger.info(f"Reconnecting {self.node.node_id} to network")
             import socket
             self.node.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            # --- ALSO APPLY FIX HERE FOR CONSISTENCY ---
+            self.node.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # ---------------------------------------------
+            
             try:
                 self.node.sock.bind(self.node.addr)
                 logger.info(f"Network reconnected for {self.node.node_id}")
             except OSError as e:
                 logger.error(f"Failed to rebind socket: {e}")
-                # Try with SO_REUSEADDR
-                self.node.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self.node.sock.bind(self.node.addr)
+                # This fallback logic is good, but setting it *before* the try
+                # is more robust.
                 
         elif fault.mode == FailureMode.PAUSE:
             # Resume operations
-            logger.info(f"Resuming {self.node.node_id}")
+            logger.info(f"Resuming {self.node.id_id}")
             self.node.is_running = True
-    
+
     def _controller_loop(self):
         """Main loop that monitors time and triggers faults."""
         logger.info("Fault injection controller started")
