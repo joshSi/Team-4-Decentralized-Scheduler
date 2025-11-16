@@ -1,12 +1,6 @@
 """
 Decentralized node for peer-to-peer scheduling and work.
-
-This node merges the responsibilities of a worker and a coordinator.
-- It performs work (loads models, has a queue) like a WorkerNode.
-- It maintains a view of the entire cluster state, like a CentralCoordinator.
-- It uses a gossip protocol to synchronize its cluster state with other peers.
-- It can receive a schedule request from a client and make a placement
-  decision based on its local, eventually-consistent view of the cluster.
+...
 """
 
 import socket
@@ -54,23 +48,7 @@ class DecentralizedNode:
     ):
         """
         Initialize a decentralized node.
-
-        Args:
-            node_id: Unique identifier for this worker
-            host: Host address for this worker
-            port: Port for this worker to listen on
-            seed_nodes: List of (host, port) tuples for bootstrapping
-            gossip_interval: Seconds between gossip syncs
-            worker_timeout: Time (seconds) after which a worker is considered dead
-            verbose: Enable detailed logging
-            use_real_models: If True, use actual PyTorch model loading from GCS
-            gcs_bucket: GCS bucket name for model storage
-            cache_dir: Local cache directory for models
-            device: PyTorch device ('cpu', 'cuda', etc.)
-            enable_metrics: Enable system metrics collection
-            enable_gpu_metrics: Enable GPU metrics (requires NVIDIA GPU and pynvml)
-            metrics_interval: Seconds between metric collections
-            metrics_log_file: Optional file to log metrics (JSON format)
+        ...
         """
         self.node_id = node_id
         self.host = host
@@ -123,6 +101,7 @@ class DecentralizedNode:
         # --- Networking & Threading ---
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.is_running = True
+        self.is_paused = False  # <-- NEW: Flag to simulate crash/partition
         self._listener_thread = None
         self._gossip_thread = None
 
@@ -201,6 +180,10 @@ class DecentralizedNode:
 
         while self.is_running:
             try:
+                if self.is_paused:
+                    time.sleep(0.1)  # Prevent busy-looping
+                    continue
+
                 raw_data, addr = self.sock.recvfrom(8192)
                 message = pickle.loads(raw_data)
                 msg_type = message.get('type')
@@ -242,9 +225,11 @@ class DecentralizedNode:
             self.logger.info(f"{self.node_id} gossip thread started")
         
         while self.is_running:
-            time.sleep(self.gossip_interval)
-            
             try:
+                if self.is_paused:
+                    time.sleep(self.gossip_interval)  # Wait for full interval
+                    continue
+
                 with self.state_lock:
                     # 1. Update our own state, including our address
                     report = self._create_own_report()
@@ -278,7 +263,8 @@ class DecentralizedNode:
                     self.logger.debug(f"Gossiped state ({len(payload)} nodes) to {target_addr}")
                             
             except Exception as e:
-                self.logger.error(f"Error in gossip thread: {e}", exc_info=True)
+                if self.is_running:
+                    self.logger.error(f"Error in gossip thread: {e}", exc_info=True)
 
         if self.verbose:
             self.logger.info(f"{self.node_id} gossip thread stopped")
@@ -477,6 +463,9 @@ class DecentralizedNode:
 
     def simulate_workload_change(self):
         """Simulate random workload changes for testing."""
+        if self.is_paused:
+            return
+            
         with self.state_lock:
             self.queue_depth = max(0, self.queue_depth + random.randint(-2, 3))
             self.memory_utilization = max(0.0, min(1.0, self.memory_utilization + random.uniform(-0.1, 0.1)))
@@ -498,6 +487,16 @@ class DecentralizedNode:
             f"Ready to serve."
         )
         return self.initialization_time
+
+    def pause(self):
+        """Pause all gossip and processing, simulating a crash or partition."""
+        self.logger.warning(f"--- NODE PAUSED (simulating crash/partition) ---")
+        self.is_paused = True
+
+    def resume(self):
+        """Resume all gossip and processing."""
+        self.logger.warning(f"--- NODE RESUMED (recovering from fault) ---")
+        self.is_paused = False
 
     # --- Start/Stop ---
 
@@ -649,7 +648,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Decentralized Node with Fault Injection")
     
-    # Existing arguments
+    # ... (all arguments are the same) ...
     parser.add_argument("--node-id", required=True, help="Unique worker ID")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, required=True, help="Port to bind to")
@@ -816,10 +815,10 @@ def main():
             time.sleep(5)
             
             # Only simulate workload if not in a fault state
-            if node.is_running:
+            if node.is_running and not node.is_paused:
                 node.simulate_workload_change()
             
-            if args.verbose and node.is_running:
+            if args.verbose and node.is_running and not node.is_paused:
                 node.print_cluster_state()
                 
     except KeyboardInterrupt:
