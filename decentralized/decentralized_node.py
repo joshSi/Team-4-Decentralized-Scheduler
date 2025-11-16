@@ -638,13 +638,14 @@ class DecentralizedNode:
                   f"queue={data['queue_depth']}, "
                   f"mem={data['memory_utilization']:.2f}")
 
-
 def main():
     """Main entry point for running a decentralized node."""
     import argparse
     import signal
 
-    parser = argparse.ArgumentParser(description="Decentralized Node")
+    parser = argparse.ArgumentParser(description="Decentralized Node with Fault Injection")
+    
+    # Existing arguments
     parser.add_argument("--node-id", required=True, help="Unique worker ID")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, required=True, help="Port to bind to")
@@ -673,6 +674,15 @@ def main():
                         help="Log metrics to file (JSON format)")
     parser.add_argument("--metrics-csv", type=str,
                         help="Export metrics to CSV on shutdown")
+    
+    # Fault injection arguments
+    parser.add_argument("--fault-schedule", type=str,
+                        help="Fault schedule: 'time:mode:duration,time:mode:duration' "
+                             "(e.g., '30:clean_shutdown:10,60:crash:15')")
+    parser.add_argument("--fault-config", type=str,
+                        help="Path to fault configuration file")
+    parser.add_argument("--enable-fault-injection", action="store_true",
+                        help="Enable fault injection (required for faults to be injected)")
 
     args = parser.parse_args()
 
@@ -689,7 +699,7 @@ def main():
     if not seed_node_list:
         print("Warning: No seed nodes provided. This node may be isolated.")
 
-
+    # Create node
     node = DecentralizedNode(
         node_id=args.node_id,
         host=args.host,
@@ -707,36 +717,117 @@ def main():
         metrics_log_file=args.metrics_log
     )
 
+    # Setup fault injection controller
+    fault_controller = None
+    if args.enable_fault_injection:
+        try:
+            from fault_injection import (
+                FaultInjectionController,
+                FailureMode,
+                parse_fault_schedule_from_file
+            )
+            
+            fault_controller = FaultInjectionController(node, verbose=True)
+            
+            # Load faults from schedule string
+            if args.fault_schedule:
+                fault_controller.add_fault_schedule(args.fault_schedule)
+            
+            # Load faults from config file
+            if args.fault_config:
+                faults = parse_fault_schedule_from_file(args.fault_config)
+                for fault in faults:
+                    fault_controller.add_fault(
+                        fault.time_offset,
+                        fault.mode,
+                        fault.duration
+                    )
+            
+            if fault_controller.faults:
+                print(f"\n{'='*70}")
+                print("FAULT INJECTION ENABLED")
+                print(f"{'='*70}")
+                for i, fault in enumerate(fault_controller.faults, 1):
+                    print(f"  {i}. {fault}")
+                print(f"{'='*70}\n")
+            else:
+                print("Warning: Fault injection enabled but no faults scheduled")
+        except ImportError:
+            print("ImportError: fault_injection module not found. Skipping")
+
     def signal_handler(sig, frame):
         print(f"\n\nShutting down node {args.node_id}...")
-        node.print_cluster_state()
+        
+        # Stop fault injection first
+        if fault_controller:
+            fault_controller.stop()
+            stats = fault_controller.get_stats()
+            print(f"\nFault Injection Stats:")
+            print(f"  Failures Injected: {stats['failures_injected']}/{stats['faults_scheduled']}")
+            print(f"  Recoveries Completed: {stats['recoveries_completed']}")
+            
+            # Print timing metrics
+            timing = fault_controller.get_timing_metrics()
+            if timing:
+                print(f"\nTiming Metrics:")
+                for i, m in enumerate(timing, 1):
+                    print(f"  Fault {i} ({m['fault_type']}):")
+                    print(f"    Scheduled: t+{m['scheduled_offset']}s for {m['scheduled_duration']}s")
+                    if m['actual_downtime']:
+                        print(f"    Actual downtime: {m['actual_downtime']:.2f}s")
+        
+        # Print cluster state
+        try:
+            node.print_cluster_state()
+        except:
+            pass
         
         # Export metrics to CSV if requested
         if args.metrics_csv and node.metrics_collector:
-            node.metrics_collector.export_to_csv(args.metrics_csv)
-            print(f"Exported metrics to {args.metrics_csv}")
+            try:
+                node.metrics_collector.export_to_csv(args.metrics_csv)
+                print(f"Exported metrics to {args.metrics_csv}")
+            except Exception as e:
+                print(f"Failed to export metrics: {e}")
         
-        node.stop()
+        # Stop node
+        try:
+            node.stop()
+        except:
+            pass
+        
         exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Initialize and start
+    # Initialize models
     if args.preload_models:
         node.initialize(args.preload_models)
     
+    # Start node
     node.start()
     
+    # Start fault injection
+    if fault_controller and fault_controller.faults:
+        fault_controller.start()
+    
     print(f"Node {args.node_id} running on {args.host}:{args.port}")
+    if fault_controller and fault_controller.faults:
+        print(f"Fault injection active with {len(fault_controller.faults)} scheduled events")
     print("Press Ctrl+C to stop")
 
-    # Simulate workload and print stats
+    # Main loop
     try:
         while True:
             time.sleep(5)
-            node.simulate_workload_change()
-            if args.verbose:
+            
+            # Only simulate workload if not in a fault state
+            if node.is_running:
+                node.simulate_workload_change()
+            
+            if args.verbose and node.is_running:
                 node.print_cluster_state()
+                
     except KeyboardInterrupt:
         signal_handler(None, None)
 
