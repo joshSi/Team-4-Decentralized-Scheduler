@@ -1,6 +1,5 @@
 """
 Decentralized node for peer-to-peer scheduling and work.
-...
 """
 
 import socket
@@ -48,7 +47,6 @@ class DecentralizedNode:
     ):
         """
         Initialize a decentralized node.
-        ...
         """
         self.node_id = node_id
         self.host = host
@@ -647,8 +645,6 @@ def main():
     import signal
 
     parser = argparse.ArgumentParser(description="Decentralized Node with Fault Injection")
-    
-    # ... (all arguments are the same) ...
     parser.add_argument("--node-id", required=True, help="Unique worker ID")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
     parser.add_argument("--port", type=int, required=True, help="Port to bind to")

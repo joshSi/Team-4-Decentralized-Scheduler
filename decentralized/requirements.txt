@@ -1,3 +1,4 @@
+docker>=7.0.0
 # Core dependencies for serverless LLM gossip system
 
 # PyTorch for model loading

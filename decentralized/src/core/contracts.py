@@ -8,6 +8,8 @@ and the centralized coordinator in the serverless LLM cluster.
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Optional
 from enum import Enum
+import json
+
 
 class PlacementAction(Enum):
     """Actions that can be taken when placing a request."""
@@ -23,13 +25,21 @@ class WorkerLoadReport:
 
     This is sent periodically by workers to the centralized coordinator
     to maintain a real-time view of cluster state.
+
+    Attributes:
+        node_id: Unique identifier for the worker node
+        loaded_models: List of model identifiers currently loaded in memory
+        queue_depth: Number of pending requests in the worker's queue
+        memory_utilization: Memory utilization as a fraction (0.0 to 1.0)
+        is_ready: Whether worker has finished initialization and is ready for inference
+        timestamp: Unix timestamp when this report was generated (optional)
     """
-    node_id: str                         # Unique identifier for the worker node
-    models_loaded: List[str]             # Models currently loaded in memory  
-    queue_depth: int                     # Number of pending requests
-    memory_utilization: float            # Memory utilization as a fraction (0.0 to 1.0)
-    is_ready: bool = False               # Whether the worker is ready for inference
-    timestamp: Optional[float] = None    # Unix timestamp of the report
+    node_id: str
+    loaded_models: List[str]
+    queue_depth: int
+    memory_utilization: float
+    is_ready: bool = False
+    timestamp: Optional[float] = None
 
     def to_dict(self) -> Dict:
         """Convert to dictionary representation."""
@@ -40,12 +50,12 @@ class WorkerLoadReport:
         return json.dumps(self.to_dict())
 
     @classmethod
-    def from_dict(cls, data: Dict):
+    def from_dict(cls, data: Dict) -> 'WorkerLoadReport':
         """Create from dictionary."""
         return cls(**data)
 
     @classmethod
-    def from_json(cls, json_str: str):
+    def from_json(cls, json_str: str) -> 'WorkerLoadReport':
         """Create from JSON string."""
         return cls.from_dict(json.loads(json_str))
 
@@ -136,7 +146,7 @@ class ScheduleResponse:
 # Example JSON formats for reference
 EXAMPLE_WORKER_LOAD_REPORT = {
     "node_id": "w1",
-    "models_loaded": ["m1", "m2"],
+    "loaded_models": ["m1", "m2"],
     "queue_depth": 3,
     "memory_utilization": 0.65,
     "is_ready": True,
@@ -156,3 +166,70 @@ EXAMPLE_SCHEDULE_RESPONSE = {
     "reason": "Worker has model loaded with low queue depth"
 }
 
+
+@dataclass
+class InferenceRequest:
+    """
+    Request to perform inference on a worker.
+
+    Attributes:
+        request_id: Unique identifier for this inference request
+        model_id: Model identifier to use for inference
+        prompt: Input text prompt for the model
+        max_tokens: Maximum number of tokens to generate
+        temperature: Sampling temperature (0.0 = deterministic)
+    """
+    request_id: str
+    model_id: str
+    prompt: str
+    max_tokens: int = 50
+    temperature: float = 0.0
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary representation."""
+        return asdict(self)
+
+    def to_json(self) -> str:
+        """Convert to JSON string."""
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'InferenceRequest':
+        """Create from dictionary."""
+        return cls(**data)
+
+
+@dataclass
+class InferenceResponse:
+    """
+    Response from inference execution.
+
+    Attributes:
+        request_id: Unique identifier for this inference request
+        worker_id: Worker that performed the inference
+        output_text: Generated text from the model
+        num_tokens: Number of tokens generated
+        latency_ms: Inference latency in milliseconds
+        success: Whether inference completed successfully
+        error: Optional error message if failed
+    """
+    request_id: str
+    worker_id: str
+    output_text: str
+    num_tokens: int
+    latency_ms: float
+    success: bool = True
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary representation."""
+        return asdict(self)
+
+    def to_json(self) -> str:
+        """Convert to JSON string."""
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'InferenceResponse':
+        """Create from dictionary."""
+        return cls(**data)
