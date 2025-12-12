@@ -251,9 +251,7 @@ class ModelLoader:
                 if not local_model_path.exists():
                     logger.info(f"Model not cached locally. Will download {model_id} from HuggingFace...")
                     # HuggingFace will download and cache automatically
-                    # Use the original model_id (e.g., 'google/gemma-2-2b')
                     local_model_path = model_id
-                    logger.info(f"HuggingFace will download to: {local_model_path}")
                 else:
                     logger.info(f"Using cached model at {local_model_path}")
 
@@ -277,7 +275,7 @@ class ModelLoader:
 
             model = AutoModelForCausalLM.from_pretrained(
                 str(local_model_path),
-                torch_dtype=torch.float16 if self.device.startswith('cuda') else torch.float32,
+                dtype=torch.float16 if self.device.startswith('cuda') else torch.float32,
                 device_map=self.device if self.device.startswith('cuda') else None,
                 low_cpu_mem_usage=True
             )
